@@ -1,0 +1,46 @@
+# ══════════════════════════════════════════════════════════════════════════════
+# SLM — Small Language Model  ·  Requirements
+# ══════════════════════════════════════════════════════════════════════════════
+#
+# Install all dependencies BEFORE running any training command:
+#
+#   pip install -r requirements.txt
+#
+# CUDA note:
+#   PyTorch below ships with CUDA 12.1 wheels.
+#   If your driver requires a different CUDA version, visit:
+#   https://pytorch.org/get-started/locally/ and replace the torch/torchvision
+#   lines with the appropriate index URL.
+#
+# Minimum hardware:
+#   GPU : NVIDIA GPU with ≥ 4 GB VRAM (bfloat16 required → Ampere+ recommended)
+#   RAM : 8 GB system RAM
+#   Disk: 1 GB free (smoke-test data shards are small)
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+# ── Core ML framework ─────────────────────────────────────────────────────────
+torch>=2.3.0
+torchvision>=0.18.0          # needed by some torch utilities; keep in sync
+
+
+# ── HuggingFace ecosystem ─────────────────────────────────────────────────────
+transformers>=4.40.0          # AutoTokenizer, from_pretrained()
+datasets>=2.19.0              # load_dataset() with streaming support
+huggingface-hub>=0.23.0       # model / dataset hub access
+
+
+# ── Numerical / data ─────────────────────────────────────────────────────────
+numpy>=1.26.0                 # uint16 shard read/write in dataset.py
+sentencepiece>=0.2.0          # Mistral tokenizer backend
+
+
+# ── Testing ───────────────────────────────────────────────────────────────────
+pytest>=8.0.0
+pytest-timeout>=2.3.0         # per-test timeouts in test_trainer.py
+
+
+# ── Optional (recommended for development) ────────────────────────────────────
+# tqdm>=4.66.0                # pretty progress bars (not required by trainer)
+# wandb>=0.17.0               # experiment tracking (not wired up yet)
+# tensorboard>=2.17.0         # loss curve visualisation

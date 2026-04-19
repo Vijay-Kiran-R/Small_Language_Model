@@ -1,0 +1,129 @@
+# ══════════════════════════════════════════════════════════════════════════════
+# SLM — Small Language Model  ·  .gitignore
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+# ── Python cache & compiled files ─────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+.Python
+
+
+# ── Distribution / packaging ──────────────────────────────────────────────────
+dist/
+build/
+*.egg-info/
+*.egg
+MANIFEST
+
+
+# ── Virtual environments ──────────────────────────────────────────────────────
+# The 'slm/' directory IS a venv — ignore its runtime contents
+slm/
+venv/
+.venv/
+env/
+.env/
+ENV/
+
+
+# ── Training checkpoints ──────────────────────────────────────────────────────
+# Checkpoints can be tens of GB — never commit them
+checkpoints/
+slm_project/checkpoints/
+*.pt
+*.pth
+*.bin.bak
+
+
+# ── Data shards ───────────────────────────────────────────────────────────────
+# Binary token shards — regenerate with download_phase1()
+data/shards/
+data/raw/
+*.bin
+
+
+# ── Tokenizer (rebuilt from HuggingFace — no need to commit) ─────────────────
+# Comment out these lines if you want to commit the tokenizer files
+# tokenizer/tokenizer.json
+# tokenizer/tokenizer_config.json
+
+
+# ── Test artefacts ────────────────────────────────────────────────────────────
+test_results.txt
+.pytest_cache/
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+*.cover
+*.coveralls.json
+
+
+# ── Jupyter / IPython ────────────────────────────────────────────────────────
+.ipynb_checkpoints/
+*.ipynb
+
+
+# ── Environment / secrets ────────────────────────────────────────────────────
+.env
+.env.*
+*.env
+secrets.yaml
+secrets.json
+
+
+# ── IDE & editor files ────────────────────────────────────────────────────────
+# VS Code
+.vscode/
+*.code-workspace
+
+# PyCharm / IntelliJ
+.idea/
+*.iml
+*.iws
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# Vim / Emacs
+*.swp
+*.swo
+*~
+\#*\#
+.\#*
+
+
+# ── OS generated files ────────────────────────────────────────────────────────
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Windows
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Linux
+.directory
+.Trash-*
+
+
+# ── Logs ─────────────────────────────────────────────────────────────────────
+logs/
+*.log
+*.out
+run_*.txt
+
+
+# ── Profiling ─────────────────────────────────────────────────────────────────
+*.prof
+*.lprof
