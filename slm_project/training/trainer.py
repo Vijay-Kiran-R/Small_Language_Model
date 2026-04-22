@@ -231,95 +231,208 @@ class Trainer:
         torch.save(payload, path)
         size_gb = os.path.getsize(path) / 1e9
         print(f"  Checkpoint saved: {path}  ({size_gb:.2f} GB)")
+        
+        # Prune old checkpoints
+        self.prune_old_checkpoints(keep_n=5)
+        
         return path
 
-    # ── Main loop ─────────────────────────────────────────────────────────────
+    def prune_old_checkpoints(self, keep_n=5):
+        """Keep last N checkpoints + the one with best val PPL."""
+        import glob
+        all_ckpts = sorted(glob.glob('checkpoints/step_*.pt'))
+        if len(all_ckpts) <= keep_n:
+            return
+        
+        # Always keep the last keep_n
+        to_keep = set(all_ckpts[-keep_n:])
+        
+        # Find best val_ppl checkpoint
+        best_ppl = float('inf')
+        best_path = None
+        for path in all_ckpts:
+            try:
+                ckpt = torch.load(path, map_location='cpu', weights_only=False)
+                ppl  = ckpt.get('val_ppl', float('inf'))
+                # Handle None values for val_ppl gracefully
+                if ppl is None:
+                    ppl = float('inf')
+                if ppl < best_ppl:
+                    best_ppl  = ppl
+                    best_path = path
+            except Exception:
+                pass
+                
+        if best_path:
+            to_keep.add(best_path)
+            
+        # Delete the rest
+        for path in all_ckpts:
+            if path not in to_keep:
+                try:
+                    os.remove(path)
+                    print(f"  Pruned old checkpoint: {path}")
+                except OSError:
+                    pass
 
-    def run(self, max_tokens: int = None) -> bool:
+    # ── Stage-Aware Methods ───────────────────────────────────────────────────
+
+    def _check_wsd_decay_trigger(self, val_ppl: float) -> bool:
         """
-        Main training loop.
+        WSD decay trigger: BOTH conditions must be true.
+        1. step > min_pretrain_steps (70,000)
+        2. val PPL has not improved for plateau_steps (3,000) consecutive steps
 
-        Args:
-            max_tokens: Stop after this many tokens seen (None = train forever).
-
-        Returns:
-            True if Phase 1 gates passed (or were not evaluated); False if any failed.
+        Returns True if decay should be triggered NOW.
+        Call this after every eval during stable phase.
         """
-        self.model.train()
-        accum_loss  = 0.0
-        micro_step  = 0
-        t0          = time.time()
+        if self.decay_triggered_at is not None:
+            return False   # already triggered
 
-        eff_batch_tokens = (
-            self.tcfg.physical_batch_seqs
-            * self.tcfg.grad_accum_steps
-            * self.model.cfg.max_seq_len
+        if self.global_step <= self.tcfg.min_pretrain_steps:
+            return False   # too early — stable phase is mandatory until 70K
+
+        if val_ppl < self.best_val_ppl:
+            self.best_val_ppl    = val_ppl
+            self.plateau_counter = 0
+            return False
+
+        self.plateau_counter += self.tcfg.eval_freq
+        if self.plateau_counter >= self.tcfg.plateau_steps:
+            self.decay_triggered_at = self.global_step
+            print(f"\n{'='*60}")
+            print(f"WSD DECAY TRIGGERED at step {self.global_step}")
+            print(f"Val PPL plateaued for {self.plateau_counter} steps (>= {self.tcfg.plateau_steps})")
+            print(f"Decaying peak_lr={self.tcfg.peak_lr} → min_lr={self.tcfg.min_lr} over 2000 steps")
+            print(f"{'='*60}\n")
+            return True
+        return False
+
+    def log_diagnostics(self, step: int, loss: float, grad_norm: float):
+        """Log all signals needed to monitor training health."""
+        from slm_project.model.attn_res import AttnRes
+        pq_norms = []
+        for name, module in self.model.named_modules():
+            if isinstance(module, AttnRes):
+                pq_norms.append(module.pseudo_query.norm().item())
+
+        lr = self.optimizer.param_groups[0]['lr']
+        pq_mean = sum(pq_norms) / len(pq_norms) if pq_norms else 0
+        pq_max  = max(pq_norms) if pq_norms else 0
+        pq_min  = min(pq_norms) if pq_norms else 0
+
+        print(
+            f"step={step:7d} | loss={loss:.4f} | lr={lr:.2e} | "
+            f"grad={grad_norm:.3f} | pq_mean={pq_mean:.4f} "
+            f"[{pq_min:.4f}, {pq_max:.4f}] | "
+            f"tok={self.tokens_seen/1e9:.3f}B"
         )
-        print(f"\nTraining started.  Device: {self.device}")
-        print(f"Effective batch: {self.tcfg.physical_batch_seqs} seqs × "
-              f"{self.tcfg.grad_accum_steps} accum × "
-              f"{self.model.cfg.max_seq_len} tokens = "
-              f"{eff_batch_tokens:,} tokens/step")
 
-        # Gate 3 check before any training
-        evaluate_phase1_gates(0, float('inf'), self.model)
+        # AttnRes diagnostics — log every 500 steps
+        if step > 0 and step % 500 == 0:
+            print(f"  AttnRes pseudo_query norms: {[f'{n:.4f}' for n in pq_norms[:8]]} ...")
 
-        first_micro = True
+    def run_stage(self, stage_name: str, shard_glob: str,
+                  token_budget: int, allow_decay: bool = False):
+        """
+        Run one pretraining stage.
+        stage_name: 'stage1', 'stage2', or 'stage3'
+        allow_decay: False for stage1/2 (keep in stable phase);
+                     True for stage3 (allow WSD decay when plateau detected)
+        """
+        from slm_project.data.dataset import ShardedDataset
+        from torch.utils.data import DataLoader
+        import glob
 
-        for batch in self.train_loader:
-            # Gate 1 — measure initial loss at very first micro-step (no grad)
-            if first_micro:
-                first_micro = False
-                input_ids_probe = batch[0][:1, :128].to(self.device)
-                with torch.no_grad(), \
-                     torch.autocast(device_type='cuda', dtype=torch.bfloat16):
-                    logits_probe, _ = self.model(input_ids_probe)
-                init_loss = torch.nn.functional.cross_entropy(
-                    logits_probe[0, :-1],
-                    input_ids_probe[0, 1:],
-                ).item()
-                evaluate_phase1_gates(0, init_loss, self.model)
+        shards = sorted(glob.glob(shard_glob))
+        assert len(shards) > 0, f"No shards for {stage_name}: {shard_glob}"
 
-            # Micro-batch step
-            step_loss = self.train_step(batch)
-            accum_loss += step_loss
+        dataset = ShardedDataset(shard_glob, seq_len=self.model.cfg.max_seq_len,
+                                 start_global_idx=self.global_step *
+                                 self.tcfg.physical_batch_seqs *
+                                 self.tcfg.grad_accum_steps)
+        loader  = DataLoader(dataset, batch_size=self.tcfg.physical_batch_seqs,
+                             shuffle=False, num_workers=2, pin_memory=True)
+
+        self.model.train()
+        accum_loss = 0.0
+        micro_step = 0
+        tokens_at_start = self.tokens_seen
+
+        print(f"\n{'='*60}")
+        print(f"STARTING {stage_name.upper()}  |  budget: {token_budget/1e9:.3f}B tokens")
+        print(f"Global step: {self.global_step}  |  Tokens seen so far: {self.tokens_seen/1e9:.3f}B")
+        print(f"WSD phase: {'DECAY' if self.decay_triggered_at else 'STABLE' if self.global_step >= self.tcfg.warmup_steps else 'WARMUP'}")
+        print(f"{'='*60}\n")
+
+        for batch in loader:
+            if (self.tokens_seen - tokens_at_start) >= token_budget:
+                break
+
+            input_ids, labels = batch
+            input_ids = input_ids.to(self.device)
+            labels    = labels.to(self.device)
+
+            with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
+                _, loss = self.model(input_ids, labels=labels,
+                                     global_step=self.global_step)
+
+            # CRITICAL: divide by grad_accum BEFORE backward
+            (loss / self.tcfg.grad_accum_steps).backward()
+            accum_loss += loss.item()
             micro_step += 1
+            self.tokens_seen += input_ids.numel()
 
-            # Full optimizer step every grad_accum_steps micro-batches
             if micro_step % self.tcfg.grad_accum_steps == 0:
-                grad_norm = self.optimizer_step()
-                avg_loss  = accum_loss / self.tcfg.grad_accum_steps
+                grad_norm = torch.nn.utils.clip_grad_norm_(
+                    self.model.parameters(), self.tcfg.grad_clip
+                )
+                self.optimizer.step()
+                self.optimizer.zero_grad(set_to_none=True)
+                self.global_step += 1
+
+                avg_loss = accum_loss / self.tcfg.grad_accum_steps
                 accum_loss = 0.0
 
-                if self.global_step % self.tcfg.log_freq == 0:
-                    pq_norms = get_pseudo_query_norms(self.model)
-                    lr_now   = self.optimizer.param_groups[0]['lr']
-                    elapsed  = time.time() - t0
-                    print(
-                        f"step={self.global_step:6d} | "
-                        f"loss={avg_loss:.4f} | "
-                        f"lr={lr_now:.2e} | "
-                        f"grad={grad_norm:.3f} | "
-                        f"pq_mean={sum(pq_norms)/len(pq_norms):.4f} | "
-                        f"tok={self.tokens_seen/1e6:.2f}M | "
-                        f"t={elapsed:.0f}s"
-                    )
+                # Update LR
+                from slm_project.training.lr_schedule import get_lr, apply_lr
+                lr = get_lr(self.global_step, self.tcfg, self.decay_triggered_at)
+                apply_lr(self.optimizer, lr)
 
-                # Phase 1 gate evaluation at step 300
-                if self.global_step == 300:
-                    gates_ok = evaluate_phase1_gates(300, avg_loss, self.model)
-                    if not gates_ok:
-                        print("PHASE 1 GATES FAILED — debug before scaling to 125M.")
-                        self.save_checkpoint()
-                        return False
+                if self.global_step % self.tcfg.log_freq == 0:
+                    self.log_diagnostics(self.global_step, avg_loss, grad_norm.item())
+
+                if self.global_step % self.tcfg.eval_freq == 0:
+                    val_ppl = self._quick_eval()
+                    if allow_decay:
+                        self._check_wsd_decay_trigger(val_ppl)
+                    else:
+                        # Stages 1 and 2: track best PPL but never trigger decay
+                        if val_ppl < self.best_val_ppl:
+                            self.best_val_ppl = val_ppl
 
                 if self.global_step % self.tcfg.ckpt_freq == 0:
                     self.save_checkpoint()
 
-            if max_tokens and self.tokens_seen >= max_tokens:
-                print(f"\nToken budget reached: {self.tokens_seen:,} tokens.")
-                break
-
         self.save_checkpoint()
-        print("Training complete.")
-        return True
+        print(f"{stage_name.upper()} complete: {(self.tokens_seen-tokens_at_start)/1e9:.3f}B tokens trained")
+
+    def _quick_eval(self) -> float:
+        """Quick perplexity estimate on a fixed 1024-token eval batch."""
+        import torch.nn.functional as F
+        self.model.eval()
+        with torch.no_grad(), torch.autocast('cuda', dtype=torch.bfloat16):
+            # Load a fixed eval shard if available; else use training batch proxy
+            try:
+                from slm_project.data.dataset import ShardedDataset
+                eval_ds = ShardedDataset('data/shards/eval/*.bin', seq_len=1024)
+                ids, lbs = eval_ds[0]
+                ids = ids.unsqueeze(0).to(self.device)
+                lbs = lbs.unsqueeze(0).to(self.device)
+                _, loss = self.model(ids, labels=lbs)
+                ppl = loss.exp().item()
+            except Exception:
+                ppl = float('inf')
+        self.model.train()
+        return ppl
+

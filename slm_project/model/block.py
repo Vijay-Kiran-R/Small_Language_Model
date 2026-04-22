@@ -22,7 +22,7 @@ from typing import List, Optional
 from slm_project.config import ModelConfig
 from slm_project.model.attn_res import AttnRes
 from slm_project.model.rms_norm import RMSNorm
-from slm_project.model.attention import GroupedQueryAttention
+from slm_project.model.attention import GroupedQueryAttention, IHAGlobalAttention
 from slm_project.model.ffn import SwiGLUFFN
 from slm_project.model.rope import RotaryEmbedding
 
@@ -60,7 +60,13 @@ class TransformerBlock(nn.Module):
         # ── Attention sub-layer ──────────────────────────────────────────────
         self.attn_res_attn = AttnRes(cfg.d_model)
         self.norm_attn     = RMSNorm(cfg.d_model)
-        self.attention     = GroupedQueryAttention(cfg, is_global=is_global, rope=rope)
+        
+        # ── CHANGED: global blocks use IHAGlobalAttention ──────────
+        if is_global:
+            self.attention = IHAGlobalAttention(cfg, P=2)
+        else:
+            self.attention = GroupedQueryAttention(cfg, is_global=False, rope=rope)
+        # ── End change ──────────────────────────────────────────────
 
         # ── FFN sub-layer ────────────────────────────────────────────────────
         self.attn_res_ffn = AttnRes(cfg.d_model)

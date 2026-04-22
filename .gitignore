@@ -127,3 +127,59 @@ run_*.txt
 # ── Profiling ─────────────────────────────────────────────────────────────────
 *.prof
 *.lprof
+
+
+# ── Test result dumps (generated output — not source) ─────────────────────────
+test_results*.txt
+test_results_*.txt
+
+
+# ── GRPO / SFT / mini-run checkpoints ────────────────────────────────────────
+# The main checkpoints/ dir is already ignored above (*.pt).
+# These subdirs may contain non-.pt files (metrics, configs) — ignore the whole tree.
+checkpoints/mini_e2e/
+checkpoints/grpo_*/
+checkpoints/sft_*/
+checkpoints/dpo_*/
+
+
+# ── Weights & Biases / experiment trackers ────────────────────────────────────
+wandb/
+runs/
+mlruns/
+.neptune/
+lightning_logs/
+
+
+# ── Temporary / scratch files ─────────────────────────────────────────────────
+tmp/
+temp/
+scratch/
+*.tmp
+*.bak
+*.swp
+
+
+# ── HuggingFace cache (can be huge) ──────────────────────────────────────────
+~/.cache/huggingface/
+.cache/
+
+
+# ── CUDA / compiled extensions ────────────────────────────────────────────────
+*.so
+*.dll
+*.cu.o
+build_ext/
+
+
+# ── SFT / eval synthetic data dumps ──────────────────────────────────────────
+# Generated files from data pipelines — not source
+data/synthetic/
+data/sft_cache/
+data/eval_cache/
+eval_outputs/
+
+
+# ── Windows PowerShell transcript files ───────────────────────────────────────
+*-transcript.txt
+PowerShell_transcript*.txt

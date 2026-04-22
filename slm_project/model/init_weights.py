@@ -45,26 +45,63 @@ def zero_attnres_pseudo_queries(module: nn.Module) -> None:
         nn.init.zeros_(module.pseudo_query)
 
 
-def init_model_weights(model: nn.Module) -> None:
+def reinit_iha_identity(module) -> None:
     """
-    Full initialisation sequence. Call exactly once before training begins.
+    Re-initialize IHA mixing tensors to identity after standard_init().
+    MUST run AFTER model.apply(standard_init) has overwritten them.
 
-    Step 1 — standard_init  : Gaussian(0, 0.02) for all Linear + Embedding.
-    Step 2 — zero_pseudo     : Zero every AttnRes.pseudo_query.  MUST BE LAST.
-    Step 3 — verification    : Assert all pseudo_queries are zero.
+    Called as the THIRD pass in init_model_weights().
+    Order: standard_init → zero_attnres → reinit_iha_identity
     """
-    # Step 1: standard Gaussian init for all layers
+    from slm_project.model.attention import IHAGlobalAttention
+    if isinstance(module, IHAGlobalAttention):
+        module._init_iha_identity()
+
+
+def init_model_weights(model) -> None:
+    """
+    Full initialisation sequence. UPDATED to include IHA identity re-init.
+
+    CRITICAL ORDER — do not change:
+    Step 1: standard_init (all linear/embedding weights)
+    Step 2: zero_attnres_pseudo_queries (MUST be after step 1)
+    Step 3: reinit_iha_identity (MUST be after step 1 — re-fixes IHA params)
+    """
+    # Step 1: Standard init for all layers
     model.apply(standard_init)
 
-    # Step 2: zero all AttnRes pseudo_queries — MUST be the final apply() call
+    # Step 2: Zero all AttnRes pseudo_queries — MUST BE AFTER standard_init
     model.apply(zero_attnres_pseudo_queries)
 
-    # Step 3: verify the zeroing held (catches any ordering mistakes)
+    # Step 3: Re-initialize IHA params to identity — MUST BE AFTER standard_init
+    model.apply(reinit_iha_identity)
+
+    # ── Verification ─────────────────────────────────────────
     from slm_project.model.attn_res import AttnRes
+    from slm_project.model.attention import IHAGlobalAttention
+    import torch
+
+    n_pq_verified = 0
+    n_iha_verified = 0
+
     for name, module in model.named_modules():
         if isinstance(module, AttnRes):
-            assert module.pseudo_query.allclose(
-                torch.zeros_like(module.pseudo_query)
-            ), f"pseudo_query not zero in '{name}' after init!"
+            assert module.pseudo_query.allclose(torch.zeros_like(module.pseudo_query)), \
+                f"pseudo_query not zero in {name} after init!"
+            n_pq_verified += 1
 
-    print("Weight init verified: all pseudo_queries = 0.0")
+        if isinstance(module, IHAGlobalAttention):
+            # Verify α_Q identity: αQ[h,h,p] = 1.0 for all h,p
+            for h in range(module.n_heads_q):
+                for p in range(module.P):
+                    assert module.alpha_Q.data[h, h, p] == 1.0, \
+                        f"alpha_Q[{h},{h},{p}] not 1.0 in {name} after init!"
+            # Verify R selects pseudo j=0
+            for h in range(module.n_heads_q):
+                assert module.R.data[h, h * module.P] == 1.0, \
+                    f"R identity not set in {name} after init!"
+            n_iha_verified += 1
+
+    print(f"Weight init verified:")
+    print(f"  {n_pq_verified} pseudo_queries = 0.0 ✓")
+    print(f"  {n_iha_verified} IHA modules = identity ✓")
