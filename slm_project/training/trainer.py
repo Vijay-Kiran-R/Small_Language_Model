@@ -150,8 +150,14 @@ class Trainer:
 
         # Inject Telemetry Manager
         from slm_project.training.telemetry import TelemetryManager
-        self.telemetry = TelemetryManager('trained_models/telemetry_run', self.model.cfg.__dict__)
-        self.telemetry.attach_activation_hooks(self.model)
+        self.telemetry = TelemetryManager(
+            run_dir='trained_models/telemetry_run',
+            model_cfg=cfg,
+            train_cfg=tcfg,
+        )
+        self.telemetry.attach_hooks(self.model)
+        self.telemetry.snapshot_init_weights(self.model)
+        self._last_train_loss: float = float('nan')
 
     # ── Core steps ───────────────────────────────────────────────────────────
 
@@ -377,7 +383,6 @@ class Trainer:
                                      global_step=self.global_step)
             timers['fwd'] = self.telemetry.stop_timer('fwd')
 
-            # CRITICAL: divide by grad_accum BEFORE backward
             self.telemetry.start_timer('bwd')
             (loss / self.tcfg.grad_accum_steps).backward()
             timers['bwd'] = self.telemetry.stop_timer('bwd')
@@ -387,53 +392,89 @@ class Trainer:
             self.tokens_seen += input_ids.numel()
 
             if micro_step % self.tcfg.grad_accum_steps == 0:
+                # Capture raw grad norm BEFORE clipping
+                grad_norm_raw = torch.nn.utils.calc_total_norm(
+                    [p.grad for p in self.model.parameters() if p.grad is not None],
+                    error_if_nonfinite=False
+                ).item() if hasattr(torch.nn.utils, 'calc_total_norm') else sum(
+                    p.grad.norm().item()**2
+                    for p in self.model.parameters() if p.grad is not None
+                ) ** 0.5
+
                 self.telemetry.start_timer('opt')
                 grad_norm = torch.nn.utils.clip_grad_norm_(
                     self.model.parameters(), self.tcfg.grad_clip
                 )
+                clipped = grad_norm_raw > self.tcfg.grad_clip
                 self.optimizer.step()
                 self.optimizer.zero_grad(set_to_none=True)
                 timers['opt'] = self.telemetry.stop_timer('opt')
-
                 self.global_step += 1
 
                 avg_loss = accum_loss / self.tcfg.grad_accum_steps
                 accum_loss = 0.0
 
-                # Update LR
                 from slm_project.training.lr_schedule import get_lr, apply_lr
                 lr = get_lr(self.global_step, self.tcfg, self.decay_triggered_at)
                 apply_lr(self.optimizer, lr)
 
                 timers['step'] = self.telemetry.stop_timer('step')
-                
-                # Approximate MFU calculation
-                flops_per_token = 6 * self.model.cfg.n_layers * (self.model.cfg.d_model ** 2)
-                flops_per_step = flops_per_token * (self.tcfg.physical_batch_seqs * self.tcfg.grad_accum_steps * self.model.cfg.max_seq_len)
-                mfu = (flops_per_step / (timers['step'] / 1000.0)) / 100e12 if timers['step'] > 0 else 0
+                tokens_this = (self.tcfg.physical_batch_seqs
+                               * self.tcfg.grad_accum_steps
+                               * self.model.cfg.max_seq_len)
 
-                if self.global_step % self.tcfg.log_freq == 0:
-                    tokens_this_step = self.tcfg.physical_batch_seqs * self.tcfg.grad_accum_steps * self.model.cfg.max_seq_len
-                    self.log_diagnostics(self.global_step, avg_loss, grad_norm.item(), lr, tokens_this_step, timers, mfu)
-                    print(f"[{stage_name.upper()}] step={self.global_step} loss={avg_loss:.4f} lr={lr:.2e} mfu={mfu*100:.1f}%")
+                # ── Tier 1: every step ──────────────────────────────────────
+                self.telemetry.log_tier1(
+                    step=self.global_step,
+                    train_loss=avg_loss,
+                    grad_norm_raw=grad_norm_raw,
+                    grad_norm_clip=grad_norm.item(),
+                    lr=lr,
+                    tokens_seen=self.tokens_seen,
+                    tokens_this_step=tokens_this,
+                    step_time_ms=timers.get('step', 0),
+                    fwd_time_ms=timers.get('fwd', 0),
+                    bwd_time_ms=timers.get('bwd', 0),
+                    data_time_ms=timers.get('data', 0),
+                    opt_time_ms=timers.get('opt', 0),
+                    clipped=clipped,
+                    model=self.model,
+                )
+                self._last_train_loss = avg_loss
 
-                if self.global_step % 100 == 0:
-                    self.telemetry.log_tier2_weights(self.model, self.optimizer, self.global_step, lr)
+                # ── Tier 1b: every 10 steps — hardware temp/power ────────────
+                if self.global_step % 10 == 0:
+                    self.telemetry.log_tier1b_hardware(self.global_step)
 
+                # ── Tier 2: every 50 steps — per-layer weights/activations ──
+                if self.global_step % 50 == 0:
+                    self.telemetry.log_tier2_layers(self.global_step, self.model, lr)
+
+                # ── Tier 2b: every 2000 steps — histograms + rank ────────────
+                if self.global_step % 2000 == 0:
+                    self.telemetry.log_tier2b_histograms(self.global_step, self.model)
+
+                # ── Tier 2c: every 500 steps — embedding metrics ─────────────
                 if self.global_step % 500 == 0:
-                    self.telemetry.log_tier3_activations(self.global_step)
+                    self.telemetry.log_tier2c_embeddings(self.global_step, self.model)
 
+                # ── Eval + optimizer state ───────────────────────────────────
                 if self.global_step % self.tcfg.eval_freq == 0:
                     val_ppl = self._quick_eval()
-                    self.telemetry.log_tier4_eval(self.global_step, val_ppl)
+                    val_loss = math.log(val_ppl) if val_ppl != float('inf') else 20.0
+                    self.telemetry.log_tier3_eval(self.global_step, val_loss, avg_loss)
+                    self.telemetry.log_tier3_optimizer(self.global_step, self.model, self.optimizer)
                     if allow_decay:
                         self._check_wsd_decay_trigger(val_ppl)
                     else:
                         if val_ppl < self.best_val_ppl:
                             self.best_val_ppl = val_ppl
 
+                # ── Checkpoint ───────────────────────────────────────────────
                 if self.global_step % self.tcfg.ckpt_freq == 0:
-                    self.save_checkpoint()
+                    ckpt_path = self.save_checkpoint()
+                    if ckpt_path:
+                        self.telemetry.log_checkpoint(self.global_step, str(ckpt_path))
 
                 self.telemetry.start_timer('step')
             self.telemetry.start_timer('data')
