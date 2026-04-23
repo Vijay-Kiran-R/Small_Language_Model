@@ -16,7 +16,7 @@ device = 'cuda' if torch.cuda.is_available() else 'cpu'
 lc_cfg = LongContextConfig()
 
 # Load DPO checkpoint (or latest pretrained if DPO not done)
-ckpts = sorted(glob.glob('checkpoints/step_*.pt') + glob.glob('checkpoints/dpo_*.pt'))
+ckpts = sorted(glob.glob('trained_models/step_*.pt') + glob.glob('trained_models/dpo_*.pt'))
 if not ckpts:
     print("WARNING: No checkpoints found. Using untrained model for Phase 5.5")
     model_state = None

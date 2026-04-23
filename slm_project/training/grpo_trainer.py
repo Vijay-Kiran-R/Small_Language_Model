@@ -544,16 +544,30 @@ class GRPOTrainer:
                     f"mean_reward={metrics['mean_reward']:.4f} | "
                     f"max_reward={metrics['max_reward']:.3f}"
                 )
+                import json
+                os.makedirs('trained_models', exist_ok=True)
+                log_entry = {
+                    "phase": "grpo",
+                    "step": self.step,
+                    "loss": metrics['loss'],
+                    "policy_loss": metrics['policy_loss'],
+                    "kl": metrics['kl'],
+                    "mean_reward": metrics['mean_reward'],
+                    "max_reward": metrics['max_reward']
+                }
+                with open('trained_models/training_logs.jsonl', 'a') as f:
+                    f.write(json.dumps(log_entry) + '\n')
 
             # Save checkpoint every 100 steps
             if self.step % 100 == 0:
+                os.makedirs('trained_models', exist_ok=True)
                 torch.save({
                     'step':        self.step,
                     'model_state': self.model.state_dict(),
                     'optimizer_state': self.optimizer.state_dict(),
                     'metrics':     metrics,
-                }, f'checkpoints/grpo_step_{self.step:04d}.pt')
-                print(f"  Checkpoint saved: grpo_step_{self.step:04d}.pt")
+                }, f'trained_models/grpo_step_{self.step:04d}.pt')
+                print(f"  Checkpoint saved: trained_models/grpo_step_{self.step:04d}.pt")
 
         print(f"\nGRPO COMPLETE: {self.step} steps")
         print(f"Final mean_reward: {metrics['mean_reward']:.4f}")

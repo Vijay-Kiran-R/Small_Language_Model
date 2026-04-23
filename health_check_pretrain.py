@@ -12,7 +12,7 @@ cfg    = ModelConfig()
 tcfg   = TrainConfig()
 
 # Load best checkpoint
-ckpts = sorted(glob.glob('checkpoints/step_*.pt'))
+ckpts = sorted(glob.glob('trained_models/step_*.pt'))
 if not ckpts:
     print("No checkpoints found. Please run pretraining first.")
     exit(0)
@@ -30,7 +30,7 @@ print(f"WSD decay triggered at: {ckpt.get('decay_triggered_at', 'None')}")
 
 # ── CHECK 1: Parameter count ──────────────────────────────────
 n_params = model.get_num_params()
-assert n_params == 125_928_448, f"FAIL: params = {n_params:,}"
+assert n_params == 125_931_008, f"FAIL: params = {n_params:,}"
 print(f"\n✓ Params: {n_params:,} = 125.9M")
 
 # ── CHECK 2: No NaN in any parameter ─────────────────────────

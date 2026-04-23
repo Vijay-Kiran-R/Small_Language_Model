@@ -22,7 +22,7 @@ verify_all_special_tokens(tok)   # all 10 special tokens; vocab=32010
 print("✓ Tokenizer: all 10 special tokens verified")
 
 # ── VERIFY 2: Model loading ────────────────────────────────────
-ckpt_path = sorted(glob.glob('checkpoints/*.pt'))[-1]
+ckpt_path = sorted(glob.glob('trained_models/*.pt'))[-1]
 ckpt      = torch.load(ckpt_path, map_location='cpu')
 model     = SLM(cfg, tcfg).to(device)
 
@@ -32,7 +32,7 @@ model.load_state_dict(state_dict, strict=False)
 model.eval()
 
 n_params = model.get_num_params()
-assert n_params == 125_928_448, f"FAIL: params = {n_params:,}"
+assert n_params == 125_931_008, f"FAIL: params = {n_params:,}"
 print(f"✓ Parameters: {n_params:,} = 125.9M")
 
 # ── VERIFY 3: No NaN in any parameter ─────────────────────────

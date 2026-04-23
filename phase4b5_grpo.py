@@ -30,7 +30,7 @@ def main():
     tok    = load_tokenizer()
 
     # ── Load Phase 4b SFT checkpoint ─────────────────────────────
-    sft_ckpts = sorted(glob.glob('checkpoints/sft_cot_*.pt'))
+    sft_ckpts = sorted(glob.glob('trained_models/sft_cot_*.pt'))
     if not sft_ckpts:
         raise FileNotFoundError(
             "No Phase 4b CoT SFT checkpoint found.\n"
@@ -106,9 +106,9 @@ def main():
         torch.save({
             'model_state': model.state_dict(),
             'grpo_steps':  trainer.step,
-        }, 'checkpoints/grpo_final.pt')
+        }, 'trained_models/grpo_final.pt')
         print("\nPhase 4b.5 GRPO complete.")
-        print("Checkpoint saved: checkpoints/grpo_final.pt")
+        print("Checkpoint saved: trained_models/grpo_final.pt")
         print("Proceed to Phase 4c: Domain Fine-Tuning.")
     else:
         print("\nGRPO halted early — check KL divergence.")

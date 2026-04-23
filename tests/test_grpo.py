@@ -49,3 +49,31 @@ def test_D_reward_functions():
     wrong_ids  = [TOK_THINK, 100, TOK_THINK_END, 300, TOK_END]
     wrong_r = compute_combined_reward(wrong_text, wrong_ids, "42", "math", gcfg=gcfg)
     assert wrong_r < 0.4
+
+def test_E_grpo_dry_run():
+    import torch
+    from slm_project.config import ModelConfig, TrainConfig, GRPOConfig
+    from slm_project.model.model import SLM
+    from slm_project.model.init_weights import init_model_weights
+    from slm_project.training.grpo_trainer import GRPOTrainer
+
+    if not torch.cuda.is_available():
+        import pytest
+        pytest.skip("CUDA not available for GRPO dry-run")
+
+    cfg   = ModelConfig()
+    tcfg  = TrainConfig()
+    gcfg  = GRPOConfig(max_steps=3, batch_questions=2, G=2)  # Tiny for dry-run
+
+    model = SLM(cfg, tcfg).cuda()
+    init_model_weights(model)
+
+    trainer = GRPOTrainer(model, gcfg, device='cuda')
+
+    # Check reference model is separate object
+    assert trainer.ref_model is not model
+    assert trainer.ref_model is not trainer.model
+    assert not any(p.requires_grad for p in trainer.ref_model.parameters())
+
+    # Verify model still has correct params
+    assert model.get_num_params() == 125_931_008

@@ -8,7 +8,7 @@ device = 'cuda' if torch.cuda.is_available() else 'cpu'
 cfg    = ModelConfig()
 tcfg   = TrainConfig()
 
-latest_ckpt = sorted(glob.glob('checkpoints/step_*.pt'))
+latest_ckpt = sorted(glob.glob('trained_models/step_*.pt'))
 if latest_ckpt:
     print(f"Loading checkpoint: {latest_ckpt[-1]}")
     ckpt  = torch.load(latest_ckpt[-1], map_location='cpu')

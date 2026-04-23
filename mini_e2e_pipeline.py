@@ -30,7 +30,7 @@ print("=" * 65)
 
 DEVICE     = 'cuda' if torch.cuda.is_available() else 'cpu'
 SHARD_GLOB = 'data/shards/fineweb_edu_shard*.bin'
-CKPT_DIR   = 'checkpoints/mini_e2e'
+CKPT_DIR   = 'trained_models/mini_e2e'
 SEQ_LEN    = 128   # Short for 4GB VRAM; production = 8192
 BATCH      = 1     # 4GB GPU: batch=1 only
 ACCUM      = 4     # Effective batch = 1 × 4 = 4

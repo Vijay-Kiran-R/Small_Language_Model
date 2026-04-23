@@ -11,7 +11,7 @@ tcfg  = TrainConfig()
 ccfg  = CoTConfig()
 
 # Load SFT checkpoint (or latest pretrained if SFT not done)
-ckpts = sorted(glob.glob('checkpoints/step_*.pt'))
+ckpts = sorted(glob.glob('trained_models/step_*.pt'))
 if ckpts:
     ckpt  = torch.load(ckpts[-1], map_location='cpu')
     model = SLM(cfg, tcfg).to(device)

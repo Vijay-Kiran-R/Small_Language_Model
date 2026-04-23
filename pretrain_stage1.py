@@ -11,7 +11,7 @@ cfg    = ModelConfig()   # n_layers=16
 tcfg   = TrainConfig()
 
 # Build model (or load checkpoint if resuming)
-latest_ckpt = sorted(glob.glob('checkpoints/step_*.pt'))
+latest_ckpt = sorted(glob.glob('trained_models/step_*.pt'))
 if latest_ckpt:
     print(f"Resuming from: {latest_ckpt[-1]}")
     ckpt  = torch.load(latest_ckpt[-1], map_location='cpu')

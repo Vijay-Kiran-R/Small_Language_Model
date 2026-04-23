@@ -148,6 +148,11 @@ class Trainer:
         self.best_val_ppl       = float('inf')
         self.plateau_counter    = 0
 
+        # Inject Telemetry Manager
+        from slm_project.training.telemetry import TelemetryManager
+        self.telemetry = TelemetryManager('trained_models/telemetry_run', self.model.cfg.__dict__)
+        self.telemetry.attach_activation_hooks(self.model)
+
     # ── Core steps ───────────────────────────────────────────────────────────
 
     def train_step(self, batch: tuple) -> float:
@@ -212,8 +217,8 @@ class Trainer:
         data_global_idx is CRITICAL for resume — without it, the next run
         reads from shard index 0 and duplicates data.
         """
-        os.makedirs('checkpoints', exist_ok=True)
-        path = f"checkpoints/step_{self.global_step:07d}.pt"
+        os.makedirs('trained_models', exist_ok=True)
+        path = f"trained_models/step_{self.global_step:07d}.pt"
         payload = {
             'global_step':        self.global_step,
             'tokens_seen':        self.tokens_seen,
@@ -240,7 +245,7 @@ class Trainer:
     def prune_old_checkpoints(self, keep_n=5):
         """Keep last N checkpoints + the one with best val PPL."""
         import glob
-        all_ckpts = sorted(glob.glob('checkpoints/step_*.pt'))
+        all_ckpts = sorted(glob.glob('trained_models/step_*.pt'))
         if len(all_ckpts) <= keep_n:
             return
         
@@ -308,29 +313,16 @@ class Trainer:
             return True
         return False
 
-    def log_diagnostics(self, step: int, loss: float, grad_norm: float):
-        """Log all signals needed to monitor training health."""
-        from slm_project.model.attn_res import AttnRes
-        pq_norms = []
-        for name, module in self.model.named_modules():
-            if isinstance(module, AttnRes):
-                pq_norms.append(module.pseudo_query.norm().item())
-
-        lr = self.optimizer.param_groups[0]['lr']
-        pq_mean = sum(pq_norms) / len(pq_norms) if pq_norms else 0
-        pq_max  = max(pq_norms) if pq_norms else 0
-        pq_min  = min(pq_norms) if pq_norms else 0
-
-        print(
-            f"step={step:7d} | loss={loss:.4f} | lr={lr:.2e} | "
-            f"grad={grad_norm:.3f} | pq_mean={pq_mean:.4f} "
-            f"[{pq_min:.4f}, {pq_max:.4f}] | "
-            f"tok={self.tokens_seen/1e9:.3f}B"
+    def log_diagnostics(self, step: int, loss: float, grad_norm: float, lr: float, tokens_this_step: int, timers: dict, mfu: float):
+        """Replaced by TelemetryManager tier-1 logging."""
+        self.telemetry.log_tier1_step(
+            step=step, loss=loss, lr=lr, grad_norm=grad_norm, 
+            tokens_seen=self.tokens_seen, tokens_this_step=tokens_this_step,
+            step_time_ms=timers.get('step', 0), data_load_time_ms=timers.get('data', 0),
+            fwd_time_ms=timers.get('fwd', 0), bwd_time_ms=timers.get('bwd', 0),
+            opt_time_ms=timers.get('opt', 0), effective_batch_size=self.tcfg.physical_batch_seqs * self.tcfg.grad_accum_steps,
+            mfu=mfu
         )
-
-        # AttnRes diagnostics — log every 500 steps
-        if step > 0 and step % 500 == 0:
-            print(f"  AttnRes pseudo_query norms: {[f'{n:.4f}' for n in pq_norms[:8]]} ...")
 
     def run_stage(self, stage_name: str, shard_glob: str,
                   token_budget: int, allow_decay: bool = False):
@@ -365,7 +357,13 @@ class Trainer:
         print(f"WSD phase: {'DECAY' if self.decay_triggered_at else 'STABLE' if self.global_step >= self.tcfg.warmup_steps else 'WARMUP'}")
         print(f"{'='*60}\n")
 
+        timers = {}
+        self.telemetry.start_timer('step')
+        self.telemetry.start_timer('data')
+
         for batch in loader:
+            timers['data'] = self.telemetry.stop_timer('data')
+
             if (self.tokens_seen - tokens_at_start) >= token_budget:
                 break
 
@@ -373,22 +371,30 @@ class Trainer:
             input_ids = input_ids.to(self.device)
             labels    = labels.to(self.device)
 
+            self.telemetry.start_timer('fwd')
             with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
                 _, loss = self.model(input_ids, labels=labels,
                                      global_step=self.global_step)
+            timers['fwd'] = self.telemetry.stop_timer('fwd')
 
             # CRITICAL: divide by grad_accum BEFORE backward
+            self.telemetry.start_timer('bwd')
             (loss / self.tcfg.grad_accum_steps).backward()
+            timers['bwd'] = self.telemetry.stop_timer('bwd')
+
             accum_loss += loss.item()
             micro_step += 1
             self.tokens_seen += input_ids.numel()
 
             if micro_step % self.tcfg.grad_accum_steps == 0:
+                self.telemetry.start_timer('opt')
                 grad_norm = torch.nn.utils.clip_grad_norm_(
                     self.model.parameters(), self.tcfg.grad_clip
                 )
                 self.optimizer.step()
                 self.optimizer.zero_grad(set_to_none=True)
+                timers['opt'] = self.telemetry.stop_timer('opt')
+
                 self.global_step += 1
 
                 avg_loss = accum_loss / self.tcfg.grad_accum_steps
@@ -399,20 +405,38 @@ class Trainer:
                 lr = get_lr(self.global_step, self.tcfg, self.decay_triggered_at)
                 apply_lr(self.optimizer, lr)
 
+                timers['step'] = self.telemetry.stop_timer('step')
+                
+                # Approximate MFU calculation
+                flops_per_token = 6 * self.model.cfg.n_layers * (self.model.cfg.d_model ** 2)
+                flops_per_step = flops_per_token * (self.tcfg.physical_batch_seqs * self.tcfg.grad_accum_steps * self.model.cfg.max_seq_len)
+                mfu = (flops_per_step / (timers['step'] / 1000.0)) / 100e12 if timers['step'] > 0 else 0
+
                 if self.global_step % self.tcfg.log_freq == 0:
-                    self.log_diagnostics(self.global_step, avg_loss, grad_norm.item())
+                    tokens_this_step = self.tcfg.physical_batch_seqs * self.tcfg.grad_accum_steps * self.model.cfg.max_seq_len
+                    self.log_diagnostics(self.global_step, avg_loss, grad_norm.item(), lr, tokens_this_step, timers, mfu)
+                    print(f"[{stage_name.upper()}] step={self.global_step} loss={avg_loss:.4f} lr={lr:.2e} mfu={mfu*100:.1f}%")
+
+                if self.global_step % 100 == 0:
+                    self.telemetry.log_tier2_weights(self.model, self.optimizer, self.global_step, lr)
+
+                if self.global_step % 500 == 0:
+                    self.telemetry.log_tier3_activations(self.global_step)
 
                 if self.global_step % self.tcfg.eval_freq == 0:
                     val_ppl = self._quick_eval()
+                    self.telemetry.log_tier4_eval(self.global_step, val_ppl)
                     if allow_decay:
                         self._check_wsd_decay_trigger(val_ppl)
                     else:
-                        # Stages 1 and 2: track best PPL but never trigger decay
                         if val_ppl < self.best_val_ppl:
                             self.best_val_ppl = val_ppl
 
                 if self.global_step % self.tcfg.ckpt_freq == 0:
                     self.save_checkpoint()
+
+                self.telemetry.start_timer('step')
+            self.telemetry.start_timer('data')
 
         self.save_checkpoint()
         print(f"{stage_name.upper()} complete: {(self.tokens_seen-tokens_at_start)/1e9:.3f}B tokens trained")
