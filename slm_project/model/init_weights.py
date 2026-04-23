@@ -103,5 +103,5 @@ def init_model_weights(model) -> None:
             n_iha_verified += 1
 
     print(f"Weight init verified:")
-    print(f"  {n_pq_verified} pseudo_queries = 0.0 ✓")
-    print(f"  {n_iha_verified} IHA modules = identity ✓")
+    print(f"  {n_pq_verified} pseudo_queries = 0.0 [OK]")
+    print(f"  {n_iha_verified} IHA modules = identity [OK]")

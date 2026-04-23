@@ -152,7 +152,7 @@ class Trainer:
         from slm_project.training.telemetry import TelemetryManager
         self.telemetry = TelemetryManager(
             run_dir='trained_models/telemetry_run',
-            model_cfg=cfg,
+            model_cfg=model.cfg,
             train_cfg=tcfg,
         )
         self.telemetry.attach_hooks(self.model)
@@ -380,7 +380,8 @@ class Trainer:
             self.telemetry.start_timer('fwd')
             with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
                 _, loss = self.model(input_ids, labels=labels,
-                                     global_step=self.global_step)
+                                     global_step=self.global_step,
+                                     use_checkpoint=True)
             timers['fwd'] = self.telemetry.stop_timer('fwd')
 
             self.telemetry.start_timer('bwd')

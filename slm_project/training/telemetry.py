@@ -290,7 +290,7 @@ class TelemetryManager:
         path = os.path.join(self.run_dir, "run_metadata.json")
         with open(path, "w") as f:
             json.dump(meta, f, indent=2, default=str)
-        print(f"[Telemetry] Run metadata written → {path}")
+        print(f"[Telemetry] Run metadata written -> {path}")
         print(f"[Telemetry] git commit: {meta['git_commit_hash']}")
 
     def snapshot_init_weights(self, model: nn.Module) -> None:

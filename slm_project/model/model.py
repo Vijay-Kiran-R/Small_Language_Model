@@ -156,16 +156,19 @@ class SLM(nn.Module):
 
         # ── 6. Losses ────────────────────────────────────────────────────────
         # Main: predict token t+1 from position t
+        # CRITICAL FIX: dataset.py already shifts labels (input_ids=chunk[:-1], labels=chunk[1:])
+        # so logits[t] should predict labels[t]. No further shifting needed!
         main_loss = F.cross_entropy(
-            logits[:, :-1].reshape(-1, self.cfg.vocab_size),
-            labels[:, 1:].reshape(-1),
+            logits.reshape(-1, self.cfg.vocab_size),
+            labels.reshape(-1),
             ignore_index=-100,
         )
 
         # MTP: predict token t+2 from position t
+        # mtp_logits[t] predicts t+2. labels[t+1] is t+2.
         mtp_loss = F.cross_entropy(
-            mtp_logits[:, :-2].reshape(-1, self.cfg.vocab_size),
-            labels[:, 2:].reshape(-1),
+            mtp_logits[:, :-1].reshape(-1, self.cfg.vocab_size),
+            labels[:, 1:].reshape(-1),
             ignore_index=-100,
         )
 
