@@ -1,7 +1,7 @@
 {
   "run_id": "telemetry_run",
-  "timestamp_start": 1776970664.8303108,
-  "git_commit_hash": "67d3476ccd84763f0d789ee0262044d8d7a7dd17",
+  "timestamp_start": 1777175773.978708,
+  "git_commit_hash": "395db01fe300f7a5c1c9e40520f7f2163fb896fd",
   "python_version": "3.11.9 (tags/v3.11.9:de54cf5, Apr  2 2024, 10:12:12) [MSC v.1938 64 bit (AMD64)]",
   "torch_version": "2.11.0+cu128",
   "cuda_version": "12.8",
@@ -16,7 +16,7 @@
   "d_head": 64,
   "ffn_hidden": 2048,
   "vocab_size": 32010,
-  "max_seq_len": 1024,
+  "max_seq_len": 8192,
   "rope_base": 500000,
   "global_layers": [
     3,
@@ -33,10 +33,10 @@
   "peak_lr": 0.0003,
   "min_lr": 3e-05,
   "warmup_steps": 2000,
-  "physical_batch": 1,
-  "grad_accum_steps": 2,
+  "physical_batch": 4,
+  "grad_accum_steps": 8,
   "grad_clip": 1.0,
-  "effective_batch_tokens": 2048,
+  "effective_batch_tokens": 262144,
   "full_config": {
     "vocab_size": 32010,
     "d_model": 768,
@@ -45,8 +45,8 @@
     "n_heads_kv": 4,
     "d_head": 64,
     "ffn_hidden": 2048,
-    "max_seq_len": 1024,
-    "swa_window": 256,
+    "max_seq_len": 8192,
+    "swa_window": 2048,
     "rope_base": 500000,
     "global_layers": [
       3,
@@ -64,8 +64,8 @@
     "warmup_steps": 2000,
     "min_pretrain_steps": 70000,
     "plateau_steps": 3000,
-    "physical_batch_seqs": 1,
-    "grad_accum_steps": 2,
+    "physical_batch_seqs": 4,
+    "grad_accum_steps": 8,
     "grad_clip": 1.0,
     "precision": "bfloat16",
     "ckpt_freq": 500,
@@ -79,6 +79,8 @@
     "adam_beta2": 0.95,
     "adam_eps": 1e-08,
     "weight_decay": 0.1,
-    "pseudo_query_lr_multiplier": 2.0
+    "pseudo_query_lr_multiplier": 2.0,
+    "muon_momentum": 0.95,
+    "muon_weight_decay": 0.01
   }
 }

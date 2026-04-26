@@ -67,16 +67,22 @@ def apply_lr(optimizer, lr: float) -> None:
     """
     Write a new base LR to all param groups.
 
-    Group index 2 (pseudo_query) always receives 2× the base LR to match
-    the ratio established at optimizer creation.  Groups 0 and 1 receive
-    the base LR directly.
+    Group index 3 (pseudo_query) always receives 2× the base LR to match
+    the ratio established at optimizer creation.  Groups 0–2 receive the
+    base LR directly.
+
+    Group layout (Muon hybrid):
+      0 → Muon hidden weights (base LR)
+      1 → AdamW no-decay: embed + 1D norms + IHA  (base LR)
+      2 → AdamW decay: catch-all  (base LR)
+      3 → AdamW pseudo_query: always 2× base LR  ← CRITICAL
 
     Args:
-        optimizer: AdamW instance built by build_optimizer().
+        optimizer: MuonWithAuxAdam instance built by build_optimizer().
         lr:        Base LR (the value returned by get_lr()).
     """
     for i, group in enumerate(optimizer.param_groups):
-        if i == 2:   # Group 3: pseudo_query — always 2× base LR
+        if i == 3:   # Group 3: pseudo_query — always 2× base LR
             group['lr'] = lr * 2.0
         else:
             group['lr'] = lr

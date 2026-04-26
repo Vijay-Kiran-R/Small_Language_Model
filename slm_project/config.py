@@ -88,12 +88,19 @@ class TrainConfig:
     mtp_anneal_start: int   = 50_000
     mtp_anneal_end:   int   = 60_000
 
-    # ── Optimizer ────────────────────────────────────────────
+    # ── AdamW optimizer ──────────────────────────────────────
     adam_beta1:   float = 0.9
     adam_beta2:   float = 0.95
     adam_eps:     float = 1e-8
     weight_decay: float = 0.1
     pseudo_query_lr_multiplier: float = 2.0  # Group 3 LR = 6e-4
+
+    # ── Muon optimizer ───────────────────────────────────────
+    # muon_momentum: momentum coefficient for Newton-Schulz update (0.95 recommended)
+    # muon_weight_decay: lower than AdamW WD because orthogonalization already
+    #   constrains singular value spectrum — acts as implicit regularizer.
+    muon_momentum:     float = 0.95
+    muon_weight_decay: float = 0.01
 
 
 # ── FINE-TUNE CONFIGURATIONS ─────────────────────────────────────────────────

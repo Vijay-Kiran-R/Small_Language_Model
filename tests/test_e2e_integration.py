@@ -131,20 +131,28 @@ print("\n[5] Optimizer group assignment for IHA params...")
 optimizer = build_optimizer(model, tcfg)
 
 # Collect IDs in each group
-group1_ids = {id(p) for p in optimizer.param_groups[0]['params']}
-group3_ids = {id(p) for p in optimizer.param_groups[2]['params']}
+# New layout: 0=Muon, 1=AdamW no-decay (embed+1D+IHA), 2=AdamW decay, 3=pseudo_query
+group0_ids = {id(p) for p in optimizer.param_groups[0]['params']}  # Muon
+group1_ids = {id(p) for p in optimizer.param_groups[1]['params']}  # AdamW no-decay
+group3_ids = {id(p) for p in optimizer.param_groups[3]['params']}  # pseudo_query
 
 for name, param in model.named_parameters():
     if any(k in name for k in ['alpha_Q', 'alpha_K', 'alpha_V', '.R']):
         assert id(param) in group1_ids, \
-            f"IHA param '{name}' is NOT in Group 1 (weight-decay)!"
+            f"IHA param '{name}' is NOT in Group 1 (AdamW no-decay)!\n" \
+            f"  In Muon group: {id(param) in group0_ids}"
         assert id(param) not in group3_ids, \
             f"IHA param '{name}' incorrectly landed in Group 3 (pseudo_query 2x LR)!"
+    # Also verify embedding is NOT in Muon group
+    if 'embed' in name:
+        assert id(param) not in group0_ids, \
+            f"CRITICAL: embedding param '{name}' is in Muon group! Must be AdamW."
 
-g1 = len(optimizer.param_groups[0]['params'])
-g2 = len(optimizer.param_groups[1]['params'])
-g3 = len(optimizer.param_groups[2]['params'])
-print(f"    PASS ✓  (Group1={g1} decay, Group2={g2} no-decay, Group3={g3} pseudo_q)")
+g0 = len(optimizer.param_groups[0]['params'])
+g1 = len(optimizer.param_groups[1]['params'])
+g2 = len(optimizer.param_groups[2]['params'])
+g3 = len(optimizer.param_groups[3]['params'])
+print(f"    PASS ✓  (Group0 Muon={g0}, Group1 AdamW-nodecay={g1}, Group2 AdamW-decay={g2}, Group3 pseudo_q={g3})")
 
 # ─────────────────────────────────────────────────────────────────
 # TEST 6 — Real data forward pass: no NaN/Inf
@@ -217,7 +225,7 @@ for step in range(2):
     torch.nn.utils.clip_grad_norm_(model2.parameters(), 1.0)
     opt2.step()
     losses.append(loss2.item())
-    print(f"    step {step+1}: loss={loss2.item():.4f}")
+    print(f"    step {step+1}: loss={loss2.item():.4f}  [Muon+AdamW hybrid]")
 
 assert not any(torch.isnan(torch.tensor(losses))), "NaN loss during training steps"
 print(f"    PASS ✓  (2 steps complete, losses={[f'{l:.4f}' for l in losses]})")
@@ -285,9 +293,9 @@ print("ALL 11 INTEGRATION TESTS PASSED ✓")
 print("=" * 65)
 print(f"  Data:       10 shards / {total_tokens:,} tokens")
 print(f"  Model:      {n_params:,} params (125.9M + IHA)")
-print(f"  IHA:        {iha_count} global layers @ P=2")
-print(f"  AttnRes:    {n_pq} pseudo_queries = 0 after init")
-print(f"  Optimizer:  IHA params correctly in Group 1")
+print(f"  Optimizer:  Muon (Group 0, {g0} tensors) + AdamW (Groups 1-3)")
+print(f"  IHA:        {iha_count} global layers @ P=2  [in AdamW Group 1]")
+print(f"  AttnRes:    {n_pq} pseudo_queries = 0 after init  [AdamW Group 3, 2x LR]")
 print(f"  Forward:    loss={loss.item():.4f} (no NaN/Inf)")
 print(f"  Backward:   full grad flow confirmed")
 print(f"  Training:   2 steps complete")

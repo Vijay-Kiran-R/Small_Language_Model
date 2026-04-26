@@ -80,9 +80,9 @@ def test_14_5_params_stay_float32():
 
 
 def test_14_6_lr_schedule_updated():
-    """LR must be non-zero and pseudo_query group must be 2x base."""
+    """LR must be non-zero and pseudo_query group (index 3) must be 2x base."""
     base_lr = opt.param_groups[0]["lr"]
-    pq_lr   = opt.param_groups[2]["lr"]
+    pq_lr   = opt.param_groups[3]["lr"]   # Group 3 is pseudo_query (was index 2 pre-Muon)
     assert base_lr > 0, f"Base LR is zero after 2 steps"
     assert abs(pq_lr - 2 * base_lr) < 1e-12, \
         f"pseudo_query LR {pq_lr} != 2x base {base_lr}"
